@@ -17,6 +17,7 @@ import {
   subscribeSession,
 } from "@/shared/chat/sessionCoordinator";
 import { clearChat } from "@/shared/chat/chatPersistence";
+import { resolveChatErrorMessage } from "@/shared/chat/errorMessage";
 import { getThreadId, newThreadId } from "@/shared/chat/threadId";
 import { fetchChatListGroup } from "@/shared/chat/lists";
 import { resolveProgressText } from "@/shared/chat/progress";
@@ -496,20 +497,24 @@ export function useChat({
               break;
             }
             case "error":
-              // 종결 이벤트 — 해당 말풍선에 에러 표시. code 별 분기는 불필요하고
-              // message 가 사용자 노출 문구다(계약 §error).
+              // 종결 이벤트 — 해당 말풍선에 에러 표시.
               //
               // 재시도 여부는 code 가 아니라 retryable 로 판단한다 — 같은 LLM_UNAVAILABLE
               // 이라도 "미구성"(재시도 무의미)과 "일시 불가"(유효)가 섞여 있어
               // emit 지점만이 안다. requestId 는 사용자 신고 시 서버 로그 추적에 쓴다.
+              // 계약상 message 가 사용자 문구지만, 운영에서는 raw 원문이 섞일 수 있어
+              // code 기반 기본 카피로 한 번 더 정규화한다.
               setProgress(null); // 종결 이벤트 — 진행 표시를 남기지 않는다
               // 계약 §3.2: error 종료 시 보관 중인 리포트는 폐기한다.
               // 패널은 건드리지 않는다 — done 이 안 왔으니 이전 리포트가 정본이다.
               pendingReport = null;
-              failLastAssistant(e.data.message, {
+              failLastAssistant(
+                resolveChatErrorMessage(e.data.code, e.data.message),
+                {
                 retryable: e.data.retryable,
                 requestId: e.data.requestId,
-              });
+                },
+              );
               break;
           }
         };
