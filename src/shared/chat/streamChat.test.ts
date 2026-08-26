@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "@/shared/types/chat";
-import { emitChunk } from "./streamChat";
+import {
+  emitChunk,
+  StreamInterruptedError,
+  streamChat,
+} from "./streamChat";
 
 /**
  * SSE 프레임 파싱 — 계약 CH-2 §와이어 포맷.
@@ -56,5 +60,80 @@ describe("emitChunk", () => {
       type: "token",
       data: { text: "ab" },
     });
+  });
+});
+
+function makeSseResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+describe("streamChat", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("마지막 done 프레임이 구분자 없이 끝나도 종결 이벤트로 읽는다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        makeSseResponse([
+          'data: {"type":"done","data":{"finishReason":"stop"}}',
+        ]),
+      ),
+    );
+
+    const events: ChatEvent[] = [];
+
+    await expect(
+      streamChat(
+        "https://example.com/chat",
+        "ticket",
+        { sessionId: "session-1", threadId: "thread-1" },
+        (event) => events.push(event),
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(events).toEqual([
+      { type: "done", data: { finishReason: "stop" } },
+    ]);
+  });
+
+  it("done/error 없이 끝나면 끊긴 스트림으로 보고 실패시킨다", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        makeSseResponse([
+          'data: {"type":"token","data":{"text":"답변이 오다가"}}\n\n',
+        ]),
+      ),
+    );
+
+    const events: ChatEvent[] = [];
+
+    await expect(
+      streamChat(
+        "https://example.com/chat",
+        "ticket",
+        { sessionId: "session-1", threadId: "thread-1" },
+        (event) => events.push(event),
+      ),
+    ).rejects.toBeInstanceOf(StreamInterruptedError);
+
+    expect(events).toEqual([
+      { type: "token", data: { text: "답변이 오다가" } },
+    ]);
   });
 });

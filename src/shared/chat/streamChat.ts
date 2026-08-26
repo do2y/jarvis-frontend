@@ -22,6 +22,19 @@ export class StreamStartError extends Error {
 }
 
 /**
+ * 스트림이 `done`/`error` 종결 이벤트 없이 끝난 경우.
+ *
+ * 계약상 모든 스트림은 둘 중 하나로 끝나야 한다. 연결이 중간에 끊기면 fetch/read 는
+ * "정상 종료"처럼 끝날 수 있지만, 화면 입장에서는 반쯤 잘린 실패다.
+ */
+export class StreamInterruptedError extends Error {
+  constructor() {
+    super("chat stream ended without terminal event");
+    this.name = "StreamInterruptedError";
+  }
+}
+
+/**
  * 채팅 SSE 스트림 소비 유틸.
  * POST + JSON body이므로 EventSource가 아닌 fetch 스트리밍으로 파싱한다.
  * 자동 재시도 금지(중복 담기 방지) — 실패 시 호출부에서 재시도 버튼 제공.
@@ -66,6 +79,13 @@ export async function streamChat(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let sawTerminalEvent = false;
+  const handleEvent = (event: ChatEvent) => {
+    if (event.type === 'done' || event.type === 'error') {
+      sawTerminalEvent = true;
+    }
+    onEvent(event);
+  };
 
   for (;;) {
     const { done, value } = await reader.read();
@@ -75,7 +95,7 @@ export async function streamChat(
     const chunks = buffer.split('\n\n');
     buffer = chunks.pop() ?? ''; // 미완성 조각 보류
 
-    for (const chunk of chunks) emitChunk(chunk, onEvent);
+    for (const chunk of chunks) emitChunk(chunk, handleEvent);
   }
 
   // 마지막 조각을 흘려보내지 않는다.
@@ -84,7 +104,11 @@ export async function streamChat(
   // 종전엔 루프를 그냥 빠져나가 버렸다. 마지막 프레임은 대개 `done` 이라 —
   // 잃으면 done 절이 실행되지 않아 분석 리포트가 패널에 커밋되지 않고(판매자),
   // zero_result 기본 문구도 채워지지 않는다. 남은 조각도 같은 규칙으로 파싱한다.
-  if (buffer) emitChunk(buffer, onEvent);
+  if (buffer) emitChunk(buffer, handleEvent);
+
+  if (!sawTerminalEvent) {
+    throw new StreamInterruptedError();
+  }
 }
 
 /**

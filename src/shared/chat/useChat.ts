@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useRef } from "react";
 import { track } from "@/shared/analytics/track";
 import { ApiError } from "@/shared/api/client";
-import { streamChat, StreamStartError } from "@/shared/chat/streamChat";
+import {
+  streamChat,
+  StreamInterruptedError,
+  StreamStartError,
+} from "@/shared/chat/streamChat";
 import {
   clearCachedSession,
   ensureSession,
@@ -566,6 +570,10 @@ export function useChat({
           failLastAssistant(
             "대화가 만료되었어요. 다시 시도하면 새로 이어서 대화할 수 있어요.",
           );
+        } else if (err instanceof StreamInterruptedError) {
+          // read 가 끝났더라도 done/error 가 없으면 정상 종료가 아니다 — 응답이
+          // 반쯤 잘려 버튼도 없이 남는 쪽이 사용자 경험상 더 나쁘다.
+          failLastAssistant("응답 연결이 중간에 끊겼어요. 다시 시도해 주세요.");
         } else if (err instanceof StreamStartError) {
           // 스트림 시작 전 거부(계약 CH-2 §실패 응답) — 상태별로 안내와 재시도 여부가 다르다.
           // 자동 재시도는 하지 않는다(중복 담기 방지) — 재시도는 버튼으로만.

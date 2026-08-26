@@ -10,9 +10,10 @@ import { ApiError } from "@/shared/api/client";
 // 담기·수량변경·삭제 후 invalidateQueries(['cart'])로 함께 갱신된다.
 export function useCart() {
   return useQuery({
-    queryKey: ["cart"],
-    queryFn: fetchCart,
+    queryKey: ["cart"], // 캐시 이름표
+    queryFn: fetchCart, // 서버 요청 함수
     staleTime: 0,
+    // 받아온 데이터를 몇 초 동안 신선하다고 볼 것인가 - 화면에 들어올 때마다 새로받기
   });
 }
 
