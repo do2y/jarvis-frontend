@@ -1,5 +1,7 @@
 import type { NextRequest } from "next/server";
 
+import { resolveMock } from "@/mocks/handlers";
+
 /**
  * /api/* 백엔드 프록시 — **로컬 개발 전용 경로**.
  *
@@ -27,6 +29,17 @@ const TARGET =
   "http://localhost:8080";
 
 const isDev = process.env.NODE_ENV === "development";
+
+/**
+ * 목 모드 — 백엔드 없이 화면을 띄운다(`MOCK_API=1 npm run dev`).
+ *
+ * 이 자리에 둔 이유: 브라우저에서 나가는 모든 /api 호출이 이미 이 프록시 한 곳을 지난다.
+ * 그래서 컴포넌트·훅·shared/api 를 하나도 건드리지 않고 목을 끼울 수 있다.
+ *
+ * NODE_ENV 로 막지 않는다 — 프로덕션 빌드로 시연할 때도 목이 필요하다.
+ * 스위치는 MOCK_API 값 하나뿐이니, 실서버에 붙이려면 그 값을 비운다.
+ */
+const useMock = process.env.MOCK_API === "1";
 
 // 홉 단위 헤더 — 프록시가 그대로 전달하면 안 된다(RFC 7230).
 // content-length는 스트림 전달 시 실제 길이와 어긋날 수 있어 fetch가 다시 계산하게 둔다.
@@ -80,6 +93,16 @@ function relaxCookieForDev(cookie: string): string {
 async function handler(req: NextRequest): Promise<Response> {
   // /api/... 경로를 그대로 백엔드에 넘긴다(쿼리스트링 포함).
   const url = new URL(req.url);
+
+  // 목이 처리하는 경로면 백엔드로 가지 않는다.
+  // 처리하지 않는 경로는 null 이라 아래 실제 프록시로 그대로 떨어진다.
+  if (useMock) {
+    const mocked = resolveMock(req.method, url.pathname, url.searchParams);
+    if (mocked) {
+      return Response.json(mocked.body, { status: mocked.status });
+    }
+  }
+
   const upstreamUrl = `${TARGET}${url.pathname}${url.search}`;
 
   // GET/HEAD는 body가 없다. 그 외는 요청 스트림을 그대로 흘려보낸다 —

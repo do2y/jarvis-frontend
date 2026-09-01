@@ -1,6 +1,8 @@
 import "server-only";
 import { cache } from "react";
 
+import { resolveMock } from "@/mocks/handlers";
+
 // 봉투 타입을 client.ts에서 가져오지 않고 여기에 다시 적는다.
 // client.ts는 클라이언트 전용 모듈(axios 인스턴스·authStore·window 참조)이라
 // 타입만 import해도 모듈 그래프가 이어져 'server-only'가 클라이언트 번들로 샌다.
@@ -83,6 +85,18 @@ const BODY_MAX_CHARS = 2000;
  * `NEXT_PUBLIC_` 접두사를 쓰지 않는다 — 서버 전용 모듈이라 브라우저로 나갈 일이
  * 없고, 접두사를 붙이면 클라이언트 번들에 값이 박힌다.
  */
+/**
+ * 목 모드 — 백엔드 없이 SSR 페이지를 렌더한다(`MOCK_API=1 npm run dev`).
+ *
+ * 프록시(app/api/[...path]/route.ts)에도 같은 스위치가 있지만 여기에 또 필요하다:
+ * SSR 조회는 브라우저를 거치지 않고 이 모듈이 백엔드를 **직접** 부르므로
+ * 프록시의 목이 걸리지 않는다. 이걸 빼면 홈·상품 상세가 SSR 에서 실패하고
+ * (5초 타임아웃) 클라이언트 조회로만 채워져 초기 HTML 이 빈 채로 나간다.
+ *
+ * NODE_ENV 로 막지 않는 이유는 프록시 쪽 주석과 같다 — 프로덕션 빌드 시연 대응.
+ */
+const USE_MOCK = process.env.MOCK_API === "1";
+
 const SSR_LOG_BODY_MODE = process.env.SSR_LOG_BODY ?? "";
 const SSR_LOG_BODY = SSR_LOG_BODY_MODE !== "" && SSR_LOG_BODY_MODE !== "0";
 const SSR_LOG_BODY_FULL = SSR_LOG_BODY_MODE === "full";
@@ -115,6 +129,27 @@ export async function serverGet<T>(
   options: ServerFetchOptions = {},
 ): Promise<T> {
   const { revalidate } = options;
+
+  // 목이 처리하는 경로면 백엔드로 나가지 않는다.
+  // 봉투를 벗기는 아래 로직을 그대로 태우기 위해 body 만 만들어 흐름에 얹는다.
+  if (USE_MOCK) {
+    const [pathname, query = ""] = path.split("?");
+    const mocked = resolveMock("GET", pathname, new URLSearchParams(query));
+    if (mocked) {
+      if (process.env.NODE_ENV === "development") {
+        console.log(`[ssr ⊙ mock] ${mocked.status} GET ${path}`);
+      }
+      const envelope = mocked.body as ApiEnvelope<T>;
+      if (!envelope.success) {
+        throw new ServerFetchError(
+          envelope.error?.message ?? "요청을 처리하지 못했습니다.",
+          mocked.status,
+          envelope.error?.code,
+        );
+      }
+      return envelope.data as T;
+    }
+  }
 
   // 개발 전용 로그. SSR 조회는 브라우저 네트워크 탭에 안 잡히므로(서버가 부른다)
   // dev 터미널에 남기지 않으면 실제로 나갔는지 확인할 방법이 없다.
